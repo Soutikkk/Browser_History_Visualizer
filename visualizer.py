@@ -1,129 +1,215 @@
+```python
 # ==============================================================================
-# Browser History Visualizer
+# Browser History Visualizer - Optimized
 # ==============================================================================
 # A Python desktop application using Tkinter and Matplotlib to visualize
 # browser history loaded from a CSV file.
 #
-# Prerequisites & Installation:
-# -----------------------------
-# 1. Install Python 3 (3.8 or newer recommended) from python.org.
-# 2. Open your terminal or command prompt and install the required external libraries:
-#    pip install pandas matplotlib
+# CSV requirements (case-insensitive):
+#   url, title, visit_time
 #
-# How to Run:
-# -----------
-# Run the script using Python:
-#    python visualizer.py
+# Install:
+#   pip install pandas matplotlib
 #
-# CSV Format Requirements:
-# -----------------------
-# The selected CSV file must contain the following columns (case-insensitive):
-# - url (e.g., https://github.com/Soutikkk)
-# - title (e.g., Soutikkk - GitHub)
-# - visit_time (e.g., 2026-06-19 09:10:00)
+# Run:
+#   python visualizer.py
 # ==============================================================================
 
 import os
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from urllib.parse import urlparse
+
 import pandas as pd
 
-# Import Matplotlib and configure the Tkinter backend
+# Configure Matplotlib before importing the TkAgg backend.
 import matplotlib
 matplotlib.use("TkAgg")
+
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
 
 class BrowserHistoryVisualizer:
+    DISPLAY_LIMIT = 1000
+    REQUIRED_COLUMNS = ("url", "title", "visit_time")
+    INVALID_DOMAINS = frozenset({"Unknown Domain", "Invalid URL"})
+
+    TREE_COLUMNS = ("Index", "Title", "URL", "Visit Time")
+
+    SORT_COLUMN_MAP = {
+        "index": "Index",
+        "title": "Title",
+        "url": "URL",
+        "visit_time": "Visit Time",
+    }
+
     def __init__(self, root):
         self.root = root
         self.root.title("Browser History Visualizer")
         self.root.geometry("1100x700")
         self.root.minsize(900, 600)
 
-        # Application state variables
-        self.df = None          # Complete loaded DataFrame
-        self.filtered_df = None # Filtered DataFrame based on search query
-        self.filepath = ""      # Path of the loaded CSV file
-        
-        # Keep track of sorting options
+        # Application state
+        self.df = None
+        self.filtered_df = None
+        self.filepath = ""
+
+        # Sorting state
         self.sort_col = None
         self.sort_ascending = True
 
-        # Initialize the User Interface
         self.setup_ui()
 
+    # --------------------------------------------------------------------------
+    # UI
+    # --------------------------------------------------------------------------
+
     def setup_ui(self):
-        """Creates and layouts all GUI components."""
-        # Main layout frame
-        main_frame = ttk.Frame(self.root, padding="10")
+        """Create and configure all GUI components."""
+        main_frame = ttk.Frame(self.root, padding=10)
         main_frame.pack(fill=tk.BOTH, expand=True)
 
-        # ----------------- TOP PANEL (Stats & File Selection) -----------------
-        top_frame = ttk.LabelFrame(main_frame, text="Controls & Overview", padding="10")
+        # ------------------------- Controls & Overview ------------------------
+
+        top_frame = ttk.LabelFrame(
+            main_frame,
+            text="Controls & Overview",
+            padding=10
+        )
         top_frame.pack(fill=tk.X, padx=5, pady=5)
 
-        # File Selection row
+        # File selection
         file_row = ttk.Frame(top_frame)
         file_row.pack(fill=tk.X, pady=5)
 
-        self.btn_load = ttk.Button(file_row, text="Load CSV File", command=self.select_file)
+        self.btn_load = ttk.Button(
+            file_row,
+            text="Load CSV File",
+            command=self.select_file
+        )
         self.btn_load.pack(side=tk.LEFT, padx=(0, 10))
 
-        self.lbl_filepath = ttk.Label(file_row, text="No CSV file loaded. Please click 'Load CSV File'.", font=("Arial", 9, "italic"))
+        self.lbl_filepath = ttk.Label(
+            file_row,
+            text="No CSV file loaded. Please click 'Load CSV File'.",
+            font=("Arial", 9, "italic")
+        )
         self.lbl_filepath.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        # Stats displays
+        # Stats and search
         stats_row = ttk.Frame(top_frame)
         stats_row.pack(fill=tk.X, pady=(10, 5))
 
-        self.lbl_total_visits = ttk.Label(stats_row, text="Total Visits: 0", font=("Arial", 11, "bold"))
+        self.lbl_total_visits = ttk.Label(
+            stats_row,
+            text="Total Visits: 0",
+            font=("Arial", 11, "bold")
+        )
         self.lbl_total_visits.pack(side=tk.LEFT, padx=(0, 30))
 
-        self.lbl_unique_domains = ttk.Label(stats_row, text="Unique Domains: 0", font=("Arial", 11, "bold"))
+        self.lbl_unique_domains = ttk.Label(
+            stats_row,
+            text="Unique Domains: 0",
+            font=("Arial", 11, "bold")
+        )
         self.lbl_unique_domains.pack(side=tk.LEFT, padx=(0, 30))
 
-        # Search Bar
-        search_label = ttk.Label(stats_row, text="Search (URL/Title):", font=("Arial", 10))
-        search_label.pack(side=tk.LEFT, padx=(30, 5))
+        ttk.Label(
+            stats_row,
+            text="Search (URL/Title):",
+            font=("Arial", 10)
+        ).pack(side=tk.LEFT, padx=(30, 5))
 
         self.search_var = tk.StringVar()
         self.search_var.trace_add("write", self.on_search_change)
-        self.entry_search = ttk.Entry(stats_row, textvariable=self.search_var, width=30)
-        self.entry_search.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        # ----------------- BOTTOM PANEL (Table & Chart split) -----------------
+        self.entry_search = ttk.Entry(
+            stats_row,
+            textvariable=self.search_var,
+            width=30
+        )
+        self.entry_search.pack(
+            side=tk.LEFT,
+            fill=tk.X,
+            expand=True
+        )
+
+        # ------------------------- Table & Chart -------------------------------
+
         bottom_frame = ttk.Frame(main_frame)
-        bottom_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+        bottom_frame.pack(
+            fill=tk.BOTH,
+            expand=True,
+            pady=10
+        )
 
-        # Left Frame: History Table
-        table_frame = ttk.LabelFrame(bottom_frame, text="History Logs", padding="5")
-        table_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+        # History table
+        table_frame = ttk.LabelFrame(
+            bottom_frame,
+            text="History Logs",
+            padding=5
+        )
+        table_frame.pack(
+            side=tk.LEFT,
+            fill=tk.BOTH,
+            expand=True,
+            padx=(0, 5)
+        )
 
-        # Setup Table (Treeview)
-        cols = ("Index", "Title", "URL", "Visit Time")
-        self.tree = ttk.Treeview(table_frame, columns=cols, show="headings", selectmode="browse")
-        
-        # Define Headings and click events for sorting
-        self.tree.heading("Index", text="#", command=lambda: self.sort_by_column("index"))
-        self.tree.heading("Title", text="Title", command=lambda: self.sort_by_column("title"))
-        self.tree.heading("URL", text="URL", command=lambda: self.sort_by_column("url"))
-        self.tree.heading("Visit Time", text="Visit Time", command=lambda: self.sort_by_column("visit_time"))
+        self.tree = ttk.Treeview(
+            table_frame,
+            columns=self.TREE_COLUMNS,
+            show="headings",
+            selectmode="browse"
+        )
 
-        # Setup Column widths and anchors
-        self.tree.column("Index", width=50, minwidth=40, anchor=tk.CENTER)
-        self.tree.column("Title", width=250, minwidth=150, anchor=tk.W)
-        self.tree.column("URL", width=250, minwidth=150, anchor=tk.W)
-        self.tree.column("Visit Time", width=150, minwidth=120, anchor=tk.CENTER)
+        # Headings
+        for column, sort_key, title in (
+            ("Index", "index", "#"),
+            ("Title", "title", "Title"),
+            ("URL", "url", "URL"),
+            ("Visit Time", "visit_time", "Visit Time"),
+        ):
+            self.tree.heading(
+                column,
+                text=title,
+                command=lambda key=sort_key: self.sort_by_column(key)
+            )
 
-        # Scrollbars for the Treeview
-        vsb = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
-        hsb = ttk.Scrollbar(table_frame, orient="horizontal", command=self.tree.xview)
-        self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        # Column configuration
+        column_config = {
+            "Index": (50, 40, tk.CENTER),
+            "Title": (250, 150, tk.W),
+            "URL": (250, 150, tk.W),
+            "Visit Time": (150, 120, tk.CENTER),
+        }
 
-        # Pack Treeview and scrollbars
+        for column, (width, minwidth, anchor) in column_config.items():
+            self.tree.column(
+                column,
+                width=width,
+                minwidth=minwidth,
+                anchor=anchor
+            )
+
+        # Scrollbars
+        vsb = ttk.Scrollbar(
+            table_frame,
+            orient="vertical",
+            command=self.tree.yview
+        )
+        hsb = ttk.Scrollbar(
+            table_frame,
+            orient="horizontal",
+            command=self.tree.xview
+        )
+
+        self.tree.configure(
+            yscrollcommand=vsb.set,
+            xscrollcommand=hsb.set
+        )
+
         self.tree.grid(row=0, column=0, sticky="nsew")
         vsb.grid(row=0, column=1, sticky="ns")
         hsb.grid(row=1, column=0, sticky="ew")
@@ -131,270 +217,456 @@ class BrowserHistoryVisualizer:
         table_frame.grid_rowconfigure(0, weight=1)
         table_frame.grid_columnconfigure(0, weight=1)
 
-        # Right Frame: Domain Bar Chart
-        self.chart_frame = ttk.LabelFrame(bottom_frame, text="Top 10 Most Visited Domains", padding="5")
-        self.chart_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0))
+        # Chart
+        self.chart_frame = ttk.LabelFrame(
+            bottom_frame,
+            text="Top 10 Most Visited Domains",
+            padding=5
+        )
+        self.chart_frame.pack(
+            side=tk.RIGHT,
+            fill=tk.BOTH,
+            expand=True,
+            padx=(5, 0)
+        )
 
-        # Setup blank Matplotlib figure
         self.fig = Figure(figsize=(5, 4), dpi=100)
         self.ax = self.fig.add_subplot(111)
-        self.fig.tight_layout()
 
-        # Canvas to integrate Figure with Tkinter
-        self.canvas = FigureCanvasTkAgg(self.fig, master=self.chart_frame)
-        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        self.canvas = FigureCanvasTkAgg(
+            self.fig,
+            master=self.chart_frame
+        )
+        self.canvas.get_tk_widget().pack(
+            fill=tk.BOTH,
+            expand=True
+        )
 
-        # Render initially empty chart state
-        self.update_chart(pd.DataFrame(columns=["domain"]))
+        self.update_chart(None)
+
+    # --------------------------------------------------------------------------
+    # File handling
+    # --------------------------------------------------------------------------
 
     def select_file(self):
-        """Prompt user to choose a CSV file and load it."""
-        file_selected = filedialog.askopenfilename(
+        """Prompt the user to select a CSV file."""
+        filepath = filedialog.askopenfilename(
             title="Select Browser History CSV",
-            filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")]
+            filetypes=[
+                ("CSV Files", "*.csv"),
+                ("All Files", "*.*")
+            ]
         )
-        if file_selected:
-            self.load_data(file_selected)
+
+        if filepath:
+            self.load_data(filepath)
 
     def load_data(self, filepath):
-        """Read data from the CSV, validate columns, and process URLs."""
+        """Load, validate, clean, and prepare CSV data."""
         try:
-            # Read CSV file
-            df_raw = pd.read_csv(filepath)
+            df = pd.read_csv(filepath)
 
-            # Standardize columns to lowercase for flexible matching
-            df_raw.columns = [col.strip().lower() for col in df_raw.columns]
+            # Normalize column names once.
+            df.columns = (
+                df.columns
+                .str.strip()
+                .str.lower()
+            )
 
-            # Verify that required columns exist
-            required_cols = ["url", "title", "visit_time"]
-            missing_cols = [col for col in required_cols if col not in df_raw.columns]
+            missing = set(self.REQUIRED_COLUMNS) - set(df.columns)
 
-            if missing_cols:
-                raise ValueError(f"Missing required columns: {', '.join(missing_cols)}")
+            if missing:
+                missing_text = ", ".join(sorted(missing))
+                raise ValueError(
+                    f"Missing required columns: {missing_text}"
+                )
 
-            # Select only required columns and create a copy
-            df = df_raw[required_cols].copy()
+            # Keep only columns required by the application.
+            df = df.loc[:, self.REQUIRED_COLUMNS].copy()
 
-            # Handle missing or invalid values
-            # Drop rows where URL is completely missing or not a string
+            # Remove rows without URLs.
             df = df.dropna(subset=["url"])
-            df["url"] = df["url"].astype(str)
 
-            # Fallback for empty titles
-            df["title"] = df["title"].fillna("No Title").astype(str)
+            # Normalize values.
+            df["url"] = df["url"].astype(str).str.strip()
 
-            # Convert visit_time to string and fill blank values
-            df["visit_time"] = df["visit_time"].fillna("Unknown Time").astype(str)
+            df["title"] = (
+                df["title"]
+                .fillna("No Title")
+                .astype(str)
+            )
 
-            # Extract Domain (netloc) from URLs and clean 'www.' prefix
-            df["domain"] = df["url"].apply(self.extract_domain)
+            df["visit_time"] = (
+                df["visit_time"]
+                .fillna("Unknown Time")
+                .astype(str)
+            )
 
-            # Reset sorting settings when loading a new file
+            # Remove empty URL rows after string conversion.
+            df = df[df["url"].ne("")]
+
+            # Extract domains once.
+            df["domain"] = df["url"].map(self.extract_domain)
+
+            # Precompute searchable lowercase values.
+            # This is significantly faster than lowercasing the entire
+            # URL/title columns on every keystroke.
+            df["_url_search"] = df["url"].str.lower()
+            df["_title_search"] = df["title"].str.lower()
+
+            # Reset application state.
+            self.df = df
+            self.filtered_df = df
+            self.filepath = filepath
+
             self.sort_col = None
             self.sort_ascending = True
 
-            # Save state
-            self.df = df
-            self.filepath = filepath
-            
-            # Clear search
             self.search_var.set("")
 
-            # Update status labels
-            self.lbl_filepath.configure(text=f"Loaded: {os.path.basename(filepath)}")
-
-            # Process data display
-            self.apply_filter_and_update()
-
-        except Exception as e:
-            messagebox.showerror(
-                "Data Load Error",
-                f"Failed to load or parse CSV file:\n{str(e)}\n\n"
-                "Please check that the file is a valid CSV containing url, title, and visit_time columns."
+            self.lbl_filepath.configure(
+                text=f"Loaded: {os.path.basename(filepath)}"
             )
 
-    def extract_domain(self, url):
-        """Helper to safely parse and return the domain name from a URL."""
-        try:
-            parsed = urlparse(url.strip())
-            domain = parsed.netloc or parsed.path
-            
-            # Extract domain if port is included
-            if ":" in domain:
-                domain = domain.split(":")[0]
+            self.apply_filter_and_update()
 
-            # Remove common prefixes like 'www.'
-            if domain.lower().startswith("www."):
+        except Exception as exc:
+            messagebox.showerror(
+                "Data Load Error",
+                f"Failed to load or parse CSV file:\n"
+                f"{exc}\n\n"
+                "Please check that the file is a valid CSV containing "
+                "url, title, and visit_time columns."
+            )
+
+    # --------------------------------------------------------------------------
+    # Data processing
+    # --------------------------------------------------------------------------
+
+    @staticmethod
+    def extract_domain(url):
+        """Safely extract and normalize a domain from a URL."""
+        try:
+            url = url.strip()
+
+            if not url:
+                return "Unknown Domain"
+
+            # urlparse treats URLs without a scheme as paths.
+            # Add // so domains such as example.com are recognized.
+            parsed = urlparse(
+                url if "://" in url else f"//{url}",
+                scheme=""
+            )
+
+            domain = parsed.netloc
+
+            if not domain:
+                return "Unknown Domain"
+
+            # Remove optional port.
+            domain = domain.split(":", 1)[0].lower()
+
+            # Remove www.
+            if domain.startswith("www."):
                 domain = domain[4:]
 
-            return domain if domain else "Unknown Domain"
-        except Exception:
+            return domain or "Unknown Domain"
+
+        except (ValueError, AttributeError):
             return "Invalid URL"
 
     def apply_filter_and_update(self):
-        """Filters the dataframe using the search string and updates UI components."""
+        """Apply search/sorting and refresh all UI components."""
         if self.df is None:
             return
 
         query = self.search_var.get().strip().lower()
 
         if query:
-            # Filter rows where URL or Title contains the query
-            mask = self.df["url"].str.lower().str.contains(query, na=False) | \
-                   self.df["title"].str.lower().str.contains(query, na=False)
-            self.filtered_df = self.df[mask].copy()
-        else:
-            self.filtered_df = self.df.copy()
-
-        # Perform sorting if a column is selected
-        if self.sort_col:
-            self.filtered_df = self.filtered_df.sort_values(
-                by=self.sort_col, 
-                ascending=self.sort_ascending, 
-                key=lambda col: col.str.lower() if col.name in ["title", "url"] else col
+            mask = (
+                self.df["_url_search"].str.contains(
+                    query,
+                    regex=False,
+                    na=False
+                )
+                |
+                self.df["_title_search"].str.contains(
+                    query,
+                    regex=False,
+                    na=False
+                )
             )
 
-        # Update visual displays
+            filtered = self.df.loc[mask]
+        else:
+            filtered = self.df
+
+        # Sort only when requested.
+        if self.sort_col:
+            sort_column = self.sort_col
+
+            # Use precomputed lowercase values for case-insensitive
+            # text sorting without modifying the displayed data.
+            if sort_column == "title":
+                filtered = filtered.sort_values(
+                    by="_title_search",
+                    ascending=self.sort_ascending,
+                    kind="stable"
+                )
+
+            elif sort_column == "url":
+                filtered = filtered.sort_values(
+                    by="_url_search",
+                    ascending=self.sort_ascending,
+                    kind="stable"
+                )
+
+            elif sort_column == "index":
+                # Original CSV order.
+                filtered = filtered.sort_index(
+                    ascending=self.sort_ascending
+                )
+
+            else:
+                filtered = filtered.sort_values(
+                    by=sort_column,
+                    ascending=self.sort_ascending,
+                    kind="stable"
+                )
+
+        self.filtered_df = filtered
+
         self.update_stats()
         self.update_table()
-        self.update_chart(self.filtered_df)
+        self.update_chart(filtered)
 
-    def on_search_change(self, *args):
-        """Callback triggered when the user types in the search bar."""
+    # --------------------------------------------------------------------------
+    # Search
+    # --------------------------------------------------------------------------
+
+    def on_search_change(self, *_):
+        """Refresh results when the search text changes."""
         self.apply_filter_and_update()
 
-    def update_stats(self):
-        """Computes and updates aggregate history stats."""
-        total_visits = len(self.filtered_df)
-        
-        # Calculate unique domains excluding empty/fallback indicators
-        valid_domains = self.filtered_df[~self.filtered_df["domain"].isin(["Unknown Domain", "Invalid URL"])]
-        unique_domains = valid_domains["domain"].nunique()
+    # --------------------------------------------------------------------------
+    # Statistics
+    # --------------------------------------------------------------------------
 
-        self.lbl_total_visits.configure(text=f"Total Visits: {total_visits}")
-        self.lbl_unique_domains.configure(text=f"Unique Domains: {unique_domains}")
+    def update_stats(self):
+        """Update aggregate statistics."""
+        if self.filtered_df is None:
+            return
+
+        total_visits = len(self.filtered_df)
+
+        valid_domains = self.filtered_df.loc[
+            ~self.filtered_df["domain"].isin(self.INVALID_DOMAINS),
+            "domain"
+        ]
+
+        unique_domains = valid_domains.nunique()
+
+        self.lbl_total_visits.configure(
+            text=f"Total Visits: {total_visits}"
+        )
+
+        self.lbl_unique_domains.configure(
+            text=f"Unique Domains: {unique_domains}"
+        )
+
+    # --------------------------------------------------------------------------
+    # Table
+    # --------------------------------------------------------------------------
 
     def update_table(self):
-        """Populates the Treeview table with current filtered records."""
-        # Clear existing items
-        for item in self.tree.get_children():
-            self.tree.delete(item)
+        """Refresh the Treeview with the current filtered records."""
+        # Remove existing rows efficiently.
+        children = self.tree.get_children()
 
-        # Insert new rows (limit to first 1000 for responsive UI scrolling performance)
-        display_limit = 1000
-        records = self.filtered_df.head(display_limit)
+        if children:
+            self.tree.delete(*children)
 
-        for index, row in records.iterrows():
+        if self.filtered_df is None:
+            return
+
+        records = self.filtered_df.iloc[:self.DISPLAY_LIMIT]
+
+        # Enumerate displayed rows so numbering remains correct after
+        # filtering and sorting.
+        for display_index, row in enumerate(records.itertuples(), start=1):
             self.tree.insert(
                 "",
                 tk.END,
                 values=(
-                    index + 1,  # 1-based record index
-                    row["title"],
-                    row["url"],
-                    row["visit_time"]
+                    display_index,
+                    row.title,
+                    row.url,
+                    row.visit_time
                 )
             )
 
-        # Append visual indicator if list is truncated
-        if len(self.filtered_df) > display_limit:
+        # Display truncation indicator.
+        total = len(self.filtered_df)
+
+        if total > self.DISPLAY_LIMIT:
             self.tree.insert(
                 "",
                 tk.END,
                 values=(
                     "...",
-                    f"[Showing first {display_limit} of {len(self.filtered_df)} matches]",
+                    f"[Showing first {self.DISPLAY_LIMIT} of {total} matches]",
                     "Search or filter to refine results",
                     ""
                 )
             )
 
+    # --------------------------------------------------------------------------
+    # Sorting
+    # --------------------------------------------------------------------------
+
     def sort_by_column(self, col_name):
-        """Sets the active sort column, toggles direction, and redraws UI."""
+        """Toggle sorting direction and refresh the interface."""
         if self.df is None:
             return
 
         if self.sort_col == col_name:
-            # Toggle direction
             self.sort_ascending = not self.sort_ascending
         else:
             self.sort_col = col_name
             self.sort_ascending = True
 
+        self.update_sort_headings()
         self.apply_filter_and_update()
 
-        # Update headings visually to show sort direction
-        column_ids = {
-            "index": "Index",
-            "title": "Title",
-            "url": "URL",
-            "visit_time": "Visit Time"
-        }
-        headers = {
-            "index": "#",
-            "title": "Title",
-            "url": "URL",
-            "visit_time": "Visit Time"
-        }
-        for key, text in headers.items():
+    def update_sort_headings(self):
+        """Update Treeview headings with sort direction indicators."""
+        for key, column in self.SORT_COLUMN_MAP.items():
+            titles = {
+                "index": "#",
+                "title": "Title",
+                "url": "URL",
+                "visit_time": "Visit Time",
+            }
+
             arrow = ""
+
             if key == self.sort_col:
                 arrow = " ▲" if self.sort_ascending else " ▼"
-            self.tree.heading(column_ids[key], text=f"{text}{arrow}")
+
+            self.tree.heading(
+                column,
+                text=f"{titles[key]}{arrow}"
+            )
+
+    # --------------------------------------------------------------------------
+    # Chart
+    # --------------------------------------------------------------------------
 
     def update_chart(self, data):
-        """Generates and draws a horizontal bar chart of the top 10 domains."""
+        """Draw a horizontal chart of the top 10 domains."""
         self.ax.clear()
 
-        # Filter out invalid domain values
-        clean_data = data[~data["domain"].isin(["Unknown Domain", "Invalid URL"])]
+        if data is None or data.empty:
+            self.show_empty_chart()
+            self.canvas.draw_idle()
+            return
 
-        # Get top 10 domains by frequency
-        top_domains = clean_data["domain"].value_counts().head(10)
+        clean_domains = data.loc[
+            ~data["domain"].isin(self.INVALID_DOMAINS),
+            "domain"
+        ]
 
-        if not top_domains.empty:
-            # Sort domain counts ascending to list highest at the top of the horizontal bar chart
-            top_domains = top_domains.sort_values(ascending=True)
+        top_domains = (
+            clean_domains
+            .value_counts()
+            .head(10)
+            .sort_values()
+        )
 
-            # Create horizontal bar plot
-            colors = ["#2B6CB0" if i == len(top_domains) - 1 else "#4299E1" for i in range(len(top_domains))]
-            self.ax.barh(top_domains.index, top_domains.values, color=colors, edgecolor="grey", height=0.6)
+        if top_domains.empty:
+            self.show_empty_chart()
+            self.canvas.draw_idle()
+            return
 
-            self.ax.set_xlabel("Visits")
-            self.ax.set_title("Top 10 Most Visited Domains", fontsize=10, fontweight="bold")
-            
-            # Format tick labels to fit cleanly
-            self.ax.tick_params(axis="y", labelsize=8)
-            self.ax.tick_params(axis="x", labelsize=8)
-            
-            # Remove top and right spines for a clean minimal aesthetic
-            self.ax.spines["top"].set_visible(False)
-            self.ax.spines["right"].set_visible(False)
-        else:
-            self.ax.text(0.5, 0.5, "No domain data to display\nLoad history to populate chart", 
-                         ha="center", va="center", transform=self.ax.transAxes, color="gray")
-            self.ax.set_xticks([])
-            self.ax.set_yticks([])
+        # Keep chart styling simple and let Matplotlib manage colors.
+        self.ax.barh(
+            top_domains.index,
+            top_domains.values,
+            edgecolor="grey",
+            height=0.6
+        )
+
+        self.ax.set_xlabel("Visits")
+        self.ax.set_title(
+            "Top 10 Most Visited Domains",
+            fontsize=10,
+            fontweight="bold"
+        )
+
+        self.ax.tick_params(axis="y", labelsize=8)
+        self.ax.tick_params(axis="x", labelsize=8)
+
+        # Clean up unnecessary borders.
+        self.ax.spines["top"].set_visible(False)
+        self.ax.spines["right"].set_visible(False)
 
         self.fig.tight_layout()
-        self.canvas.draw()
+        self.canvas.draw_idle()
+
+    def show_empty_chart(self):
+        """Display the empty chart state."""
+        self.ax.text(
+            0.5,
+            0.5,
+            "No domain data to display\nLoad history to populate chart",
+            ha="center",
+            va="center",
+            transform=self.ax.transAxes,
+            color="gray"
+        )
+
+        self.ax.set_xticks([])
+        self.ax.set_yticks([])
+
+        self.ax.spines["top"].set_visible(False)
+        self.ax.spines["right"].set_visible(False)
+
+
+# ==============================================================================
+# Application entry point
+# ==============================================================================
+
+def main():
+    root = tk.Tk()
+
+    root.rowconfigure(0, weight=1)
+    root.columnconfigure(0, weight=1)
+
+    style = ttk.Style()
+
+    try:
+        style.theme_use("clam")
+    except tk.TclError:
+        # Fall back to the platform default if Clam is unavailable.
+        pass
+
+    style.configure(
+        "Treeview.Heading",
+        font=("Arial", 9, "bold")
+    )
+
+    style.configure(
+        "Treeview",
+        font=("Arial", 9),
+        rowheight=22
+    )
+
+    BrowserHistoryVisualizer(root)
+
+    root.mainloop()
 
 
 if __name__ == "__main__":
-    # Create the root Tkinter application
-    root = tk.Tk()
-    
-    # Configure grid weights for main window resizing support
-    root.rowconfigure(0, weight=1)
-    root.columnconfigure(0, weight=1)
-    
-    # Apply a modern clean style to the ttk elements
-    style = ttk.Style()
-    style.theme_use("clam")  # Clam theme offers a clean, cross-platform flat aesthetic
-
-    # Configure custom padding/font styles
-    style.configure("Treeview.Heading", font=("Arial", 9, "bold"))
-    style.configure("Treeview", font=("Arial", 9), rowheight=22)
-
-    app = BrowserHistoryVisualizer(root)
-    root.mainloop()
+    main()
+```
